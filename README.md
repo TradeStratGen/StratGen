@@ -1,7 +1,7 @@
 # ▶️ How to Run
 
 ### 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/genai-trading-bot.git
+git clone
 cd genai-trading-bot
 
 ### 2. Create virtual environment
