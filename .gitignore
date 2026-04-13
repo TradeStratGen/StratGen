@@ -1,0 +1,97 @@
+# Byte-compiled / optimized / DLL files
+
+**pycache**/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+
+venv/
+.env/
+.env.*
+
+# Distribution / packaging
+
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+
+*.log
+
+# Unit test / coverage reports
+
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+pytest_cache/
+
+# Jupyter Notebook
+
+.ipynb_checkpoints
+
+# VS Code / IDE
+
+.vscode/
+.idea/
+
+# OS files
+
+.DS_Store
+Thumbs.db
+
+# Data files (optional – uncomment if you don’t want to track data)
+
+# data/
+
+# *.csv
+
+# *.json
+
+# Model / output files
+
+*.pkl
+*.joblib
+*.h5
+*.pt
+*.onnx
+
+# Environment variables / secrets
+
+config.local.py
+secrets.json
+
+# Temporary files
+
+*.tmp
+*.bak
+
+# Streamlit / Dash cache (if used)
+
+.streamlit/
+dash_app_cache/
+
+# SQLite / DB
+
+*.sqlite3
+*.db
+
+# Signals or runtime outputs (optional)
+
+# signals.json

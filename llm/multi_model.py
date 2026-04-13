@@ -1,0 +1,263 @@
+"""
+llm/multi_model.py  — v2
+
+KEY FIX: tournament now backtests each model on the FULL df (all regimes),
+not on isolated per-regime rows. Per-regime isolation fails because
+regime rows are non-consecutive and the 10-bar hold period never completes.
+
+Tournament logic:
+  For each model → generate strategies for all regimes → backtest FULL df
+  → pick the model with the best overall return
+  → use that model's strategies as final_strategies
+"""
+
+import time, json
+from strategies.base_strategy import BaseStrategy
+from llm.client import OllamaClient, OpenRouterClient
+from llm.prompts import build_prompt
+from llm.parser import parse_strategy, REGIME_FALLBACKS
+from backtest.backtester import Backtester
+from utils.metrics import compute_metrics
+from config import MIN_HOLD_BARS, POST_SELL_COOLDOWN
+
+_DEFAULT_FALLBACK = REGIME_FALLBACKS["Neutral"]
+
+
+# ── Thin strategy wrapper used inside the tournament ─────────────────────────
+
+class _ModelStrategy(BaseStrategy):
+    """A fully working strategy for one model's set of regime rules."""
+
+    def __init__(self, strategies: dict):
+        super().__init__()
+        self.strategies       = strategies
+        self._active_strategy = {}
+        self._active_regime   = ""
+        self._in_position     = False
+        self._bars_held       = 0
+        self._bars_since_sell = POST_SELL_COOLDOWN
+
+    @property
+    def current_strategy(self):
+        return self._active_strategy
+
+    def generate_signal(self, row) -> str:
+        regime = str(row.get("regime", "Neutral"))
+        if regime != self._active_regime:
+            self._active_strategy = self.strategies.get(
+                regime, REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK).copy()
+            )
+            self._active_regime = regime
+
+        ns    = _ns(row)
+        entry = _eval(self._active_strategy.get("entry_condition", "False"), ns)
+        exit_ = _eval(self._active_strategy.get("exit_condition",  "False"), ns)
+
+        if self._in_position:
+            self._bars_held += 1
+            if exit_ and self._bars_held >= MIN_HOLD_BARS:
+                self._in_position     = False
+                self._bars_held       = 0
+                self._bars_since_sell = 0
+                return "SELL"
+            return "HOLD"
+        else:
+            self._bars_since_sell += 1
+            if entry and self._bars_since_sell >= POST_SELL_COOLDOWN:
+                self._in_position    = True
+                self._bars_held      = 0
+                return "BUY"
+            return "HOLD"
+
+
+# ── Main multi-model class ────────────────────────────────────────────────────
+
+class MultiModelStrategy(BaseStrategy):
+    """
+    Generates strategies from N models, backtests each on the FULL df,
+    picks the winner by total return, and uses winner's strategies.
+
+    Usage:
+        multi = MultiModelStrategy(models=["qwen2.5:7b-instruct", "llama3.2:3b"])
+        multi.prime(df)
+        bt = Backtester(df, multi)
+        equity, trades = bt.run()
+    """
+
+    def __init__(self, models: list = None, verbose: bool = True):
+        super().__init__()
+        self.verbose      = verbose
+        self.model_names  = models or ["qwen2.5:7b-instruct", "llama3.2:3b"]
+
+        self.model_results:    dict = {}   # model -> {strategies, return, metrics}
+        self.winner_model:     str  = ""
+        self.final_strategies: dict = {}
+
+        self._active_strategy: dict = {}
+        self._active_regime:   str  = ""
+        self._in_position:     bool = False
+        self._bars_held:       int  = 0
+        self._bars_since_sell: int  = POST_SELL_COOLDOWN
+
+    # ── Tournament ────────────────────────────────────────────────────────
+
+    def prime(self, df, pause_seconds: float = 0.0):
+        regimes = list(df["regime"].dropna().unique())
+        print(f"\n[MultiModel] Models  : {self.model_names}")
+        print(f"[MultiModel] Regimes : {regimes}")
+        print(f"[MultiModel] Method  : full-df backtest per model\n")
+
+        for model_name in self.model_names:
+            print(f"{'─'*55}")
+            print(f"[MultiModel] Generating — {model_name}")
+            print(f"{'─'*55}")
+
+            client     = OllamaClient(model=model_name)
+            strategies = self._generate_all(client, model_name, df, regimes)
+
+            print(f"\n[MultiModel] Backtesting {model_name} on full df...")
+            strat_obj      = _ModelStrategy(strategies)
+            bt             = Backtester(df, strat_obj)
+            equity, trades = bt.run()
+            m              = compute_metrics(equity, trades)
+
+            self.model_results[model_name] = {
+                "strategies": strategies,
+                "equity":     equity,
+                "trades":     trades,
+                "metrics":    m,
+            }
+            print(f"  return={m['total_return_pct']:+.1f}%  "
+                  f"trades={m['num_trades']}  "
+                  f"win={m['win_rate_pct']:.0f}%  "
+                  f"sharpe={m['sharpe_ratio']:.2f}")
+
+            if pause_seconds > 0:
+                time.sleep(pause_seconds)
+
+        self._pick_winner()
+        self._print_table()
+
+    def _generate_all(self, client, model_name, df, regimes) -> dict:
+        strategies = {}
+        for regime in regimes:
+            regime_df  = df[df["regime"] == regime]
+            sample_row = regime_df.iloc[-1]
+            fallback   = REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK)
+            if self.verbose:
+                print(f"  [{model_name[:22]:<22}] '{regime}'...")
+            try:
+                raw    = client.generate(build_prompt(regime, sample_row))
+                parsed = parse_strategy(raw, regime_df=regime_df, regime=regime)
+                strategies[regime] = parsed if parsed else fallback.copy()
+                if self.verbose:
+                    print(f"  {'':24}  entry: {strategies[regime].get('entry_condition')}")
+            except Exception as e:
+                print(f"  [{model_name[:22]}] Error: {e} — fallback")
+                strategies[regime] = fallback.copy()
+        return strategies
+
+    def _pick_winner(self):
+        """Pick the model with the best total return on full df."""
+        best_ret   = -999
+        best_model = self.model_names[0]
+
+        for mn, data in self.model_results.items():
+            ret = data["metrics"]["total_return_pct"]
+            if ret > best_ret:
+                best_ret   = ret
+                best_model = mn
+
+        self.winner_model     = best_model
+        self.final_strategies = self.model_results[best_model]["strategies"]
+
+    def _print_table(self):
+        print(f"\n{'═'*65}")
+        print(f"  MULTI-MODEL TOURNAMENT RESULTS (full-df backtest)")
+        print(f"{'═'*65}")
+
+        col = 14
+        hdr = f"  {'Model':<24}"
+        for lbl in ["Return %", "Win Rate %", "Sharpe", "Trades"]:
+            hdr += f"  {lbl:>{col}}"
+        print(hdr)
+        print(f"  {'─'*24}" + f"  {'─'*col}" * 4)
+
+        for mn, data in self.model_results.items():
+            m    = data["metrics"]
+            star = "  ★ WINNER" if mn == self.winner_model else ""
+            short = mn.split(":")[0].split("/")[-1]
+            print(
+                f"  {short:<24}"
+                f"  {m['total_return_pct']:>+{col}.1f}%"
+                f"  {m['win_rate_pct']:>{col}.1f}%"
+                f"  {m['sharpe_ratio']:>{col}.3f}"
+                f"  {m['num_trades']:>{col}}"
+                f"{star}"
+            )
+
+        print(f"{'─'*65}")
+        print(f"  Winner: {self.winner_model}")
+        print(f"\n  Final strategies from winner:")
+        for regime, strat in self.final_strategies.items():
+            short = self.winner_model.split(":")[0].split("/")[-1]
+            print(f"  [{short}] {regime:12s} → {strat.get('entry_condition')}")
+        print(f"{'═'*65}\n")
+
+    # ── BaseStrategy interface ────────────────────────────────────────────
+
+    def generate_signal(self, row) -> str:
+        regime = str(row.get("regime", "Neutral"))
+        if regime != self._active_regime:
+            self._active_strategy = self.final_strategies.get(
+                regime, REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK).copy()
+            )
+            self._active_regime = regime
+
+        ns    = _ns(row)
+        entry = _eval(self._active_strategy.get("entry_condition", "False"), ns)
+        exit_ = _eval(self._active_strategy.get("exit_condition",  "False"), ns)
+
+        if self._in_position:
+            self._bars_held += 1
+            if exit_ and self._bars_held >= MIN_HOLD_BARS:
+                self._in_position     = False
+                self._bars_held       = 0
+                self._bars_since_sell = 0
+                return "SELL"
+            return "HOLD"
+        else:
+            self._bars_since_sell += 1
+            if entry and self._bars_since_sell >= POST_SELL_COOLDOWN:
+                self._in_position    = True
+                self._bars_held      = 0
+                return "BUY"
+            return "HOLD"
+
+    @property
+    def current_strategy(self): return self._active_strategy
+    @property
+    def all_strategies(self):   return self.final_strategies
+
+    def print_report(self):
+        print("\n[MultiModel] Winner per metric:")
+        for mn, data in self.model_results.items():
+            m = data["metrics"]
+            short = mn.split(":")[0].split("/")[-1]
+            win = "★" if mn == self.winner_model else " "
+            print(f"  {win} {short:<20} return={m['total_return_pct']:+.1f}%  trades={m['num_trades']}")
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _ns(row) -> dict:
+    ns = {}
+    for col in ["Close","SMA_20","SMA_50","RSI","RSI2","MACD_hist","ATR_pct","volatility","returns"]:
+        if col in row.index:
+            try:    ns[col] = float(row[col])
+            except: ns[col] = 0.0
+    return ns
+
+def _eval(expr: str, ns: dict) -> bool:
+    try:    return bool(eval(expr, {"__builtins__": {}}, ns))
+    except: return False
