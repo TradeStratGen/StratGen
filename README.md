@@ -23,3 +23,10 @@ python main.py
 
 ### 6. Run dashboard
 streamlit run dashboard/app.py
+
+
+Commands:
+python3 main.py
+python main.py --live          # just today's signal, no full backtest
+python live_signal.py          # same thing standalone
+python live_signal.py --order  # also places paper order on Dhan
