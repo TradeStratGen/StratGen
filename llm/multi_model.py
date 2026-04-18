@@ -36,6 +36,7 @@ class _ModelStrategy(BaseStrategy):
         self._in_position     = False
         self._bars_held       = 0
         self._bars_since_sell = POST_SELL_COOLDOWN
+        self.best_per_regime: dict = {}
 
     @property
     def current_strategy(self):
@@ -119,7 +120,33 @@ class MultiModelStrategy(BaseStrategy):
             strat_obj      = _ModelStrategy(strategies)
             bt             = Backtester(df, strat_obj)
             equity, trades = bt.run()
-            m              = compute_metrics(equity, trades)
+            m = compute_metrics(equity, trades)
+
+            # --- REAL per-regime returns ---
+            per_regime = {}
+            regimes = df["regime"].unique()
+
+            for r in regimes:
+                mask = df["regime"] == r
+                if mask.sum() < 10:
+                    continue
+
+                sub_df = df[mask]
+
+                try:
+                    bt_r = Backtester(sub_df, _ModelStrategy(strategies))
+                    eq_r, tr_r = bt_r.run()
+                    m_r = compute_metrics(eq_r, tr_r)
+
+                    per_regime[r] = {
+                        "return": m_r.get("total_return_pct", 0)
+                    }
+                except:
+                    per_regime[r] = {"return": 0}
+
+            m["per_regime"] = per_regime
+
+            m["per_regime"] = per_regime
 
             self.model_results[model_name] = {
                 "strategies": strategies,
@@ -136,6 +163,7 @@ class MultiModelStrategy(BaseStrategy):
                 time.sleep(pause_seconds)
 
         self._pick_winner()
+        self._compute_best_per_regime()
         self._print_table()
 
     def _generate_all(self, client, model_name, df, regimes) -> dict:
@@ -170,6 +198,28 @@ class MultiModelStrategy(BaseStrategy):
 
         self.winner_model     = best_model
         self.final_strategies = self.model_results[best_model]["strategies"]
+
+    def _compute_best_per_regime(self):
+        """
+        Compute best model per regime based on per-regime returns.
+        Used by dashboard.
+        """
+        best = {}
+
+        for model_name, data in self.model_results.items():
+            metrics = data.get("metrics", {})
+            regime_metrics = metrics.get("per_regime", {})
+
+            for regime, vals in regime_metrics.items():
+                ret = vals.get("return", 0)
+
+                if regime not in best or ret > best[regime]["return"]:
+                    best[regime] = {
+                        "model": model_name,
+                        "return": ret
+                    }
+
+        self.best_per_regime = best
 
     def _print_table(self):
         print(f"\n{'═'*65}")
