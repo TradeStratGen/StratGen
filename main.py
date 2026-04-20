@@ -42,7 +42,8 @@ def main():
 
     # ── 1. MA baseline ──────────────────────────────────────────────────
     print("\n--- Baseline: MA Crossover ---")
-    ma_eq, ma_tr = Backtester(df, MovingAverageStrategy()).run()
+    ma_bt = Backtester(df, MovingAverageStrategy())
+    ma_eq, ma_tr = ma_bt.run()
     print_metrics(compute_metrics(ma_eq, ma_tr), "MA Crossover (Baseline)")
 
     # ── 2. Multi-model tournament ────────────────────────────────────────
@@ -52,7 +53,8 @@ def main():
         verbose=True,
     )
     multi.prime(df)
-    mm_eq, mm_tr = Backtester(df, multi).run()
+    mm_bt = Backtester(df, multi)
+    mm_eq, mm_tr = mm_bt.run()
     print_metrics(compute_metrics(mm_eq, mm_tr), "Multi-Model (best per regime)")
 
     # ── 3. Show strategy reasoning ───────────────────────────────────────
@@ -69,6 +71,33 @@ def main():
         "MA Crossover": (ma_eq, ma_tr),
         "Multi-Model":  (mm_eq, mm_tr),
     })
+
+    # ── 4b. Wire daily report with real backtest metrics ────────────────
+    from utils.reporter import DailyReporter
+    from utils.metrics import compute_metrics as _cm
+    reporter = DailyReporter(log_dir="logs")
+
+    # Bridge: export backtest orders in the same logs/orders schema for dashboard
+    mm_written = reporter.export_backtest_orders(
+        order_events=getattr(mm_bt, "order_events", []),
+        source="backtest-mm",
+        run_tag="mm",
+    )
+    ma_written = reporter.export_backtest_orders(
+        order_events=getattr(ma_bt, "order_events", []),
+        source="backtest-ma",
+        run_tag="ma",
+    )
+    print(f"[Reporter] Backtest orders exported → MA: {ma_written}, Multi-Model: {mm_written}")
+
+    reporter.save_daily_report(
+        ma_metrics  = _cm(ma_eq, ma_tr),
+        llm_metrics = _cm(mm_eq, mm_tr),
+        strategies  = multi.final_strategies,
+        winner_model= multi.winner_model,
+        today_signal= sig if 'sig' in dir() else "UNKNOWN",
+        today_regime = df.iloc[-1]["regime"],
+    )
 
     # ── 5. Walk-forward validation ───────────────────────────────────────
     if not args.no_wf:
@@ -96,7 +125,7 @@ def main():
         try:
             entry = bool(eval(strat.get("entry_condition","False"), {"__builtins__":{}}, ns))
             exit_ = bool(eval(strat.get("exit_condition","False"),  {"__builtins__":{}}, ns))
-            sig   = "BUY" if entry and not exit_ else ("SELL" if exit_ else "HOLD")
+            sig   = "BUY" if entry and not exit_ else ("SELL" if exit_ else "HOLD")  # noqa: F841
         except:
             sig = "HOLD"
         icon = {"BUY":"✅","SELL":"🔴","HOLD":"⏸"}

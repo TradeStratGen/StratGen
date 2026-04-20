@@ -28,5 +28,21 @@
       "stop_loss": 0.012,
       "take_profit": 0.025
     }
+  },
+  {
+    "timestamp": "2026-04-18T08:10:11.535960",
+    "date": "2026-04-17",
+    "regime": "Volatile",
+    "signal": "SELL",
+    "close": 24353.55078125,
+    "rsi": 66.6770935841459,
+    "rsi2": 81.94382068346059,
+    "strategy": {
+      "entry_condition": "RSI2 < 10 and ATR_pct < 0.022",
+      "exit_condition": "RSI2 > 78 or Close < SMA_50",
+      "stop_loss": 0.01,
+      "take_profit": 0.02,
+      "reasoning": "Mean reversion in high volatility with RSI2 indicating extreme oversold condition"
+    }
   }
 ]

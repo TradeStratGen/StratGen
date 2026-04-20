@@ -95,3 +95,7 @@ dash_app_cache/
 # Signals or runtime outputs (optional)
 
 # signals.json
+
+logs/
+logs_*
+

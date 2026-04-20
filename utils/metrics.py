@@ -42,11 +42,13 @@ def compute_metrics(
     annualised_return_pct = ((final / initial) ** (1 / years) - 1) * 100 if years > 0 else 0.0
 
     # ── Win / loss from round trips ───────────────────────────────────────
+    # Backtester emits SELL, SELL-SL, SELL-TP, SELL-TRAIL — all close a position
+    SELL_ACTIONS = {"SELL", "SELL-SL", "SELL-TP", "SELL-TRAIL"}
     open_buys, win_pcts, loss_pcts = [], [], []
     for _, action, price in trades:
         if action == "BUY":
             open_buys.append(price)
-        elif action == "SELL" and open_buys:
+        elif action in SELL_ACTIONS and open_buys:
             bp  = open_buys.pop(0)
             pct = (price - bp) / bp * 100
             (win_pcts if pct >= 0 else loss_pcts).append(pct)

@@ -12,6 +12,7 @@ Tournament logic:
 """
 
 import time, json
+from pathlib import Path
 from strategies.base_strategy import BaseStrategy
 from llm.client import OllamaClient, OpenRouterClient
 from llm.prompts import build_prompt
@@ -21,6 +22,8 @@ from utils.metrics import compute_metrics
 from config import MIN_HOLD_BARS, POST_SELL_COOLDOWN
 
 _DEFAULT_FALLBACK = REGIME_FALLBACKS["Neutral"]
+GEN_RETRIES = 5
+MULTI_CACHE_PATH = Path("strategy_cache_multi_model.json")
 
 
 # ── Thin strategy wrapper used inside the tournament ─────────────────────────
@@ -89,6 +92,7 @@ class MultiModelStrategy(BaseStrategy):
         super().__init__()
         self.verbose      = verbose
         self.model_names  = models or ["qwen2.5:7b-instruct", "llama3.2:3b"]
+        self._cache = self._load_cache()
 
         self.model_results:    dict = {}   # model -> {strategies, return, metrics}
         self.winner_model:     str  = ""
@@ -174,16 +178,85 @@ class MultiModelStrategy(BaseStrategy):
             fallback   = REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK)
             if self.verbose:
                 print(f"  [{model_name[:22]:<22}] '{regime}'...")
-            try:
-                raw    = client.generate(build_prompt(regime, sample_row))
-                parsed = parse_strategy(raw, regime_df=regime_df, regime=regime)
-                strategies[regime] = parsed if parsed else fallback.copy()
+
+            cached = self._get_cached_regime(model_name, regime)
+            if cached and cached.get("source") == "llm-generated":
+                strategies[regime] = cached
                 if self.verbose:
-                    print(f"  {'':24}  entry: {strategies[regime].get('entry_condition')}")
-            except Exception as e:
-                print(f"  [{model_name[:22]}] Error: {e} — fallback")
-                strategies[regime] = fallback.copy()
+                    print("  " + " " * 24 + "source: llm-generated (cached, reused)")
+                continue
+
+            last_error = None
+            fallback_reason = "all-retries-exhausted"
+            for attempt in range(1, GEN_RETRIES + 1):
+                try:
+                    raw = client.generate(build_prompt(regime, sample_row, retry_index=attempt))
+                    parsed = parse_strategy(raw, regime_df=regime_df, regime=regime)
+                    if parsed and parsed.get("source") == "llm-generated":
+                        strategies[regime] = parsed
+                        self._set_cached_regime(model_name, regime, parsed)
+                        if self.verbose:
+                            print("  " + " " * 24 + f"source: llm-generated (attempt {attempt}/{GEN_RETRIES})")
+                            print(f"  {'':24}  entry: {strategies[regime].get('entry_condition')}")
+                        break
+                    fallback_reason = str((parsed or {}).get("fallback_reason", "parser-returned-fallback"))
+                    if self.verbose:
+                        print("  " + " " * 24 + f"parser fallback reason: {fallback_reason}")
+                except Exception as e:
+                    last_error = e
+                    fallback_reason = f"exception: {e}"
+
+                if self.verbose:
+                    print("  " + " " * 24 + f"retry {attempt}/{GEN_RETRIES} failed")
+
+            if regime not in strategies:
+                last_good = self._get_last_good_regime(model_name, regime)
+                if last_good:
+                    strategies[regime] = last_good
+                    if self.verbose:
+                        print("  " + " " * 24 + f"source: llm-generated (reused last-good) | reason: {fallback_reason}")
+                    continue
+
+                fallback_payload = fallback.copy()
+                fallback_payload["source"] = "fallback"
+                fallback_payload["fallback_reason"] = fallback_reason
+                strategies[regime] = fallback_payload
+                if self.verbose:
+                    print("  " + " " * 24 + f"source: fallback | reason: {fallback_reason}")
         return strategies
+
+    def _load_cache(self) -> dict:
+        if not MULTI_CACHE_PATH.exists():
+            return {"strategies": {}}
+        try:
+            data = json.loads(MULTI_CACHE_PATH.read_text())
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {"strategies": {}}
+
+    def _save_cache(self):
+        try:
+            MULTI_CACHE_PATH.write_text(json.dumps(self._cache, indent=2))
+        except Exception:
+            pass
+
+    def _get_cached_regime(self, model_name: str, regime: str) -> dict | None:
+        item = self._cache.get("strategies", {}).get(model_name, {}).get(regime)
+        return item if isinstance(item, dict) else None
+
+    def _set_cached_regime(self, model_name: str, regime: str, strategy: dict):
+        self._cache.setdefault("strategies", {}).setdefault(model_name, {})[regime] = strategy
+        if str(strategy.get("source", "")).strip().lower() == "llm-generated":
+            self._cache.setdefault("last_good", {}).setdefault(model_name, {})[regime] = strategy
+        self._save_cache()
+
+    def _get_last_good_regime(self, model_name: str, regime: str) -> dict | None:
+        item = self._cache.get("last_good", {}).get(model_name, {}).get(regime)
+        if isinstance(item, dict) and item.get("source") == "llm-generated":
+            return item
+        return None
 
     def _pick_winner(self):
         """Pick the model with the best total return on full df."""

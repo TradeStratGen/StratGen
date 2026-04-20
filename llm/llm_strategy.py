@@ -4,6 +4,7 @@ Hold: 10 bars. Cooldown: 5 bars.
 """
 
 import time, json
+from pathlib import Path
 from strategies.base_strategy import BaseStrategy
 from llm.client import OllamaClient, OpenRouterClient
 from llm.prompts import build_prompt
@@ -19,16 +20,20 @@ _DEFAULT_FALLBACK = REGIME_FALLBACKS["Neutral"]
 
 MIN_HOLD_BARS      = 10
 POST_SELL_COOLDOWN = 5
+CACHE_PATH = Path("strategy_cache_llm.json")
+GEN_RETRIES = 5
 
 class LLMStrategy(BaseStrategy):
     def __init__(self, backend="ollama", model=None, verbose=True):
         super().__init__()
         self.verbose = verbose
+        self.backend = backend
+        self.model_name = model or ("qwen2.5:7b-instruct" if backend == "ollama" else "gemma")
         if backend == "ollama":
-            self.client = OllamaClient(model=model or "qwen2.5:7b-instruct")
+            self.client = OllamaClient(model=self.model_name)
             print(f"[LLM] Backend: Ollama ({self.client.model})")
         else:
-            self.client = OpenRouterClient(model=model or "gemma")
+            self.client = OpenRouterClient(model=self.model_name)
             print(f"[LLM] Backend: OpenRouter ({self.client.model})")
         self._strategies      = {}
         self._active_strategy = {}
@@ -36,6 +41,8 @@ class LLMStrategy(BaseStrategy):
         self._in_position     = False
         self._bars_held       = 0
         self._bars_since_sell = POST_SELL_COOLDOWN
+        self._cache = self._load_cache()
+        self._cache_key = f"{self.backend}:{self.client.model}"
 
     def prime(self, df, pause_seconds=0.0):
         regimes = list(df["regime"].dropna().unique())
@@ -49,25 +56,94 @@ class LLMStrategy(BaseStrategy):
                 time.sleep(pause_seconds)
         print("\n[LLM] Final strategies:")
         for regime, strat in self._strategies.items():
-            fb     = REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK)
-            is_llm = strat.get("entry_condition") != fb["entry_condition"]
-            tag    = "[LLM]     " if is_llm else "[FALLBACK]"
+            src = str(strat.get("source", "fallback"))
+            tag = "[LLM]     " if src == "llm-generated" else "[FALLBACK]"
             print(f"  {tag} {regime:12s} -> {strat.get('entry_condition')}")
         print()
 
     def _generate_for_regime(self, regime, sample_row, regime_df):
         if self.verbose: print(f"[LLM] Generating for '{regime}'...")
         fallback = REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK)
+
+        cached = self._get_cached_regime(regime)
+        if cached and cached.get("source") == "llm-generated":
+            self._strategies[regime] = cached
+            if self.verbose:
+                print(f"      source: llm-generated (cached, reused)")
+            return
+
+        last_error = None
+        fallback_reason = "all-retries-exhausted"
+        for attempt in range(1, GEN_RETRIES + 1):
+            try:
+                raw = self.client.generate(build_prompt(regime, sample_row, retry_index=attempt))
+                parsed = parse_strategy(raw, regime_df=regime_df, regime=regime)
+                if parsed and parsed.get("source") == "llm-generated":
+                    self._strategies[regime] = parsed
+                    self._set_cached_regime(regime, parsed)
+                    if self.verbose:
+                        print(f"      source: llm-generated (attempt {attempt}/{GEN_RETRIES})")
+                        print(f"      entry : {parsed.get('entry_condition')}")
+                        print(f"      exit  : {parsed.get('exit_condition')}")
+                    return
+                fallback_reason = str((parsed or {}).get("fallback_reason", "parser-returned-fallback"))
+                if self.verbose:
+                    print(f"      Parser fallback reason: {fallback_reason}")
+            except Exception as e:
+                last_error = e
+                fallback_reason = f"exception: {e}"
+
+            if self.verbose:
+                print(f"      LLM retry {attempt}/{GEN_RETRIES} failed")
+
+        # Reuse last good LLM strategy if available (preferred over fallback)
+        last_good = self._get_last_good_regime(regime)
+        if last_good:
+            self._strategies[regime] = last_good
+            if self.verbose:
+                print(f"      source: llm-generated (reused last-good) | reason: {fallback_reason}")
+            return
+
+        fallback_payload = fallback.copy()
+        fallback_payload["source"] = "fallback"
+        fallback_payload["fallback_reason"] = fallback_reason
+        self._strategies[regime] = fallback_payload
+        if self.verbose:
+            print(f"      source: fallback | reason: {fallback_reason}")
+
+    def _load_cache(self) -> dict:
+        if not CACHE_PATH.exists():
+            return {"strategies": {}}
         try:
-            raw    = self.client.generate(build_prompt(regime, sample_row))
-            parsed = parse_strategy(raw, regime_df=regime_df, regime=regime)
-            self._strategies[regime] = parsed if parsed else fallback.copy()
-            if self.verbose and parsed:
-                print(f"      entry : {parsed.get('entry_condition')}")
-                print(f"      exit  : {parsed.get('exit_condition')}")
-        except Exception as e:
-            print(f"      Error: {e} — regime fallback")
-            self._strategies[regime] = fallback.copy()
+            data = json.loads(CACHE_PATH.read_text())
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+        return {"strategies": {}}
+
+    def _save_cache(self):
+        try:
+            CACHE_PATH.write_text(json.dumps(self._cache, indent=2))
+        except Exception:
+            pass
+
+    def _get_cached_regime(self, regime: str) -> dict | None:
+        model_bucket = self._cache.get("strategies", {}).get(self._cache_key, {})
+        item = model_bucket.get(regime)
+        return item if isinstance(item, dict) else None
+
+    def _set_cached_regime(self, regime: str, strategy: dict):
+        self._cache.setdefault("strategies", {}).setdefault(self._cache_key, {})[regime] = strategy
+        if str(strategy.get("source", "")).strip().lower() == "llm-generated":
+            self._cache.setdefault("last_good", {}).setdefault(self._cache_key, {})[regime] = strategy
+        self._save_cache()
+
+    def _get_last_good_regime(self, regime: str) -> dict | None:
+        item = self._cache.get("last_good", {}).get(self._cache_key, {}).get(regime)
+        if isinstance(item, dict) and item.get("source") == "llm-generated":
+            return item
+        return None
 
     def generate_signal(self, row) -> str:
         regime = str(row.get("regime", "Neutral"))

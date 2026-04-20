@@ -47,19 +47,25 @@ REGIME_FALLBACKS = {
 }
 _DEFAULT_FALLBACK = REGIME_FALLBACKS["Neutral"]
 
-REGIME_MAX_FIRE = {"Bullish": 0.20, "Bearish": 0.12, "Volatile": 0.25, "Neutral": 0.25}
+REGIME_WARN_FIRE = 0.40
+REGIME_REJECT_FIRE = 0.50
 
 
 def parse_strategy(raw_text: str, regime_df=None, regime: str = "") -> dict:
     fallback = REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK)
-    max_fire = REGIME_MAX_FIRE.get(regime, 0.20)
 
     if not raw_text or not raw_text.strip():
-        return fallback.copy()
+        out = fallback.copy()
+        out["source"] = "fallback"
+        out["fallback_reason"] = "empty-llm-output"
+        return out
 
     data = _extract_json(_strip_fences(raw_text))
     if data is None:
-        return fallback.copy()
+        out = fallback.copy()
+        out["source"] = "fallback"
+        out["fallback_reason"] = "invalid-json-output"
+        return out
 
     for f in REQUIRED_FIELDS:
         if f not in data:
@@ -68,27 +74,32 @@ def parse_strategy(raw_text: str, regime_df=None, regime: str = "") -> dict:
     entry = _validate_condition(data["entry_condition"], "entry_condition") or fallback["entry_condition"]
     exit_ = _validate_condition(data["exit_condition"],  "exit_condition")  or fallback["exit_condition"]
 
+    fire_rate = None
     if regime_df is not None and len(regime_df) > 10:
         fire_rate = _measure_fire_rate(entry, regime_df)
-        if fire_rate > max_fire:
-            print(f"[Parser] [{regime}] entry fires {fire_rate:.0%} > {max_fire:.0%} — fallback entry")
+        if fire_rate > REGIME_REJECT_FIRE:
+            print(f"[Parser] [{regime}] entry fires {fire_rate:.0%} > {REGIME_REJECT_FIRE:.0%} — fallback entry")
             entry     = fallback["entry_condition"]
             fire_rate = _measure_fire_rate(entry, regime_df)
+        elif fire_rate > REGIME_WARN_FIRE:
+            print(f"[Parser] [{regime}] entry fire rate high ({fire_rate:.0%}) but accepted")
         if fire_rate == 0.0:
-            print(f"[Parser] [{regime}] entry never fires — fallback entry")
-            entry     = fallback["entry_condition"]
-            fire_rate = _measure_fire_rate(entry, regime_df)
+            print(f"[Parser] [{regime}] entry never fires — accepted")
         print(f"[Parser] [{regime}] fire rate: {fire_rate:.1%}  ok")
 
     reasoning = str(data.get("reasoning", fallback.get("reasoning", "")))[:200]
 
-    return {
+    out = {
         "entry_condition": entry,
         "exit_condition":  exit_,
         "stop_loss":       _clamp(data["stop_loss"],   0.005, 0.15, fallback["stop_loss"]),
         "take_profit":     _clamp(data["take_profit"], 0.005, 0.40, fallback["take_profit"]),
         "reasoning":       reasoning,
+        "source":          "llm-generated",
     }
+    if fire_rate is not None:
+        out["fire_rate"] = round(float(fire_rate), 4)
+    return out
 
 
 def _measure_fire_rate(condition: str, df) -> float:
@@ -109,7 +120,7 @@ def _measure_fire_rate(condition: str, df) -> float:
 
 def _validate_condition(expr, field):
     if not isinstance(expr, str) or not expr.strip(): return None
-    expr = expr.strip()
+    expr = _normalize_condition(expr)
     if expr.lower() in ("false", "true"): return None
     for tok in FORBIDDEN_TOKENS:
         if tok in expr: return None
@@ -118,6 +129,17 @@ def _validate_condition(expr, field):
     try: compile(expr, "<string>", "eval")
     except SyntaxError: return None
     return expr
+
+
+def _normalize_condition(expr) -> str:
+    s = str(expr).strip()
+    s = s.replace("&&", " and ").replace("||", " or ")
+    s = re.sub(r"\bAND\b", "and", s)
+    s = re.sub(r"\bOR\b", "or", s)
+    s = re.sub(r"\bNOT\b", "not", s)
+    s = re.sub(r"(?<![<>=!])=(?!=)", "==", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
 
 
 def _strip_fences(text):
@@ -133,10 +155,28 @@ def _strip_fences(text):
 def _extract_json(text):
     try: return json.loads(text)
     except: pass
+
+    # Minor format issues: single quotes, bare keys, trailing commas
+    normalized = text
+    normalized = re.sub(r"([{,]\s*)([A-Za-z_][\w]*)\s*:", r'\1"\2":', normalized)
+    normalized = re.sub(r",\s*([}\]])", r"\1", normalized)
+    normalized = normalized.replace("'", '"')
+    try:
+        return json.loads(normalized)
+    except:
+        pass
+
     m = re.search(r"\{.*\}", text, re.DOTALL)
     if m:
-        try: return json.loads(m.group())
-        except: pass
+        frag = m.group()
+        try:
+            return json.loads(frag)
+        except:
+            frag = re.sub(r"([{,]\s*)([A-Za-z_][\w]*)\s*:", r'\1"\2":', frag)
+            frag = re.sub(r",\s*([}\]])", r"\1", frag)
+            frag = frag.replace("'", '"')
+            try: return json.loads(frag)
+            except: pass
     return None
 
 

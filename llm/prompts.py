@@ -59,9 +59,15 @@ REGIME_CONFIG = {
 _DEFAULT = REGIME_CONFIG["Neutral"]
 
 
-def build_prompt(regime: str, row=None) -> str:
+def build_prompt(regime: str, row=None, retry_index: int = 1) -> str:
     cfg      = REGIME_CONFIG.get(regime, _DEFAULT)
     snapshot = _format_snapshot(row) if row is not None else ""
+    retry_note = ""
+    if retry_index > 1:
+        retry_note = (
+            f"\nRETRY CONTEXT (attempt {retry_index}): keep rules simpler than previous attempt; "
+            "prefer robust thresholds and avoid overfitting."
+        )
 
     return f"""You are a systematic quantitative trader for NIFTY 50.
 
@@ -83,11 +89,15 @@ STRICT OUTPUT RULES:
 3. NEVER write literal False or True.
 4. stop_loss and take_profit are decimal fractions like 0.02 meaning 2%.
 5. reasoning = ONE sentence explaining why this entry fits the regime.
+6. Keep each condition realistic and simple (max 3 clauses).
+7. Avoid overfitting: do not use fragile exact thresholds or long chained logic.
+8. Prefer robust indicator relationships over many numeric constants.
+9. Use simple flat logic only: avoid nested parentheses and avoid nested boolean groups.
 
 EXAMPLE for {regime.upper()}:
 {{"entry_condition": "{cfg["entry"]}", "exit_condition": "{cfg["exit"]}", "stop_loss": {cfg["sl"]}, "take_profit": {cfg["tp"]}, "reasoning": "{cfg["reasoning_example"]}"}}
 
-Output the JSON for {regime.upper()} now. You may vary RSI/RSI2 thresholds by up to ±5:"""
+Output the JSON for {regime.upper()} now. You may vary RSI/RSI2 thresholds by up to ±5.{retry_note}"""
 
 
 def _format_snapshot(row) -> str:

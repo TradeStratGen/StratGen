@@ -22,10 +22,12 @@ class OllamaClient:
     Local LLM via Ollama. Temperature=0.1 for consistent JSON output.
     Run: ollama serve  (in a separate terminal)
     """
-    def __init__(self, model=OLLAMA_MODEL, temperature=0.1, timeout=120):
+    def __init__(self, model=OLLAMA_MODEL, temperature=0.1, timeout=300, max_retries=3, retry_delay=3.0):
         self.model       = model
         self.temperature = temperature
         self.timeout     = timeout
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
     def generate(self, prompt,
                  system="You are a quantitative trading system. Output only valid JSON."):
@@ -41,17 +43,25 @@ class OllamaClient:
                 "repeat_penalty": 1.1,   # discourages repetitive/looping output
             },
         }
-        try:
-            r = requests.post(OLLAMA_URL, json=payload, timeout=self.timeout)
-            r.raise_for_status()
-            return r.json()["message"]["content"].strip()
-        except requests.exceptions.ConnectionError:
-            raise RuntimeError(
-                "Cannot reach Ollama at localhost:11434.\n"
-                "Start it with:  ollama serve"
-            )
-        except Exception as e:
-            raise RuntimeError(f"Ollama error: {e}")
+        last_error = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                r = requests.post(OLLAMA_URL, json=payload, timeout=self.timeout)
+                r.raise_for_status()
+                return r.json()["message"]["content"].strip()
+            except requests.exceptions.ConnectionError:
+                last_error = RuntimeError(
+                    "Cannot reach Ollama at localhost:11434.\n"
+                    "Start it with:  ollama serve"
+                )
+            except Exception as e:
+                last_error = RuntimeError(f"Ollama error: {e}")
+
+            print(f"[LLM] Ollama attempt {attempt}/{self.max_retries} failed")
+            if attempt < self.max_retries:
+                time.sleep(self.retry_delay)
+
+        raise RuntimeError(str(last_error))
 
     def generate_json(self, prompt):
         return _safe_parse_json(self.generate(prompt))
@@ -60,13 +70,14 @@ class OllamaClient:
 class OpenRouterClient:
     """Cloud LLM via OpenRouter (rate-limited on free tier)."""
     def __init__(self, api_key=None, model="gemma", max_tokens=512,
-                 temperature=0.1, max_retries=1, retry_delay=5.0):
+                 temperature=0.1, max_retries=3, retry_delay=5.0, timeout=300):
         self.api_key     = api_key or os.getenv("OPENROUTER_API_KEY", "")
         self.model       = OPENROUTER_MODELS.get(model, model)
         self.max_tokens  = max_tokens
         self.temperature = temperature
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.timeout     = timeout
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type":  "application/json",
@@ -89,7 +100,7 @@ class OpenRouterClient:
         for attempt in range(1, self.max_retries + 1):
             try:
                 r = requests.post(OPENROUTER_URL, headers=self.headers,
-                                  json=payload, timeout=30)
+                                  json=payload, timeout=self.timeout)
                 r.raise_for_status()
                 return r.json()["choices"][0]["message"]["content"].strip()
             except Exception as e:

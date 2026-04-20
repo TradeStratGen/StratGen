@@ -1,0 +1,32 @@
+{
+  "date": "2026-04-20",
+  "strategies": {
+    "Volatile": {
+      "entry_condition": "RSI2 < 10 and ATR_pct < 0.022",
+      "exit_condition": "RSI2 > 78 or Close < SMA_50",
+      "stop_loss": 0.01,
+      "take_profit": 0.02,
+      "reasoning": "Mean reversion in high volatility with RSI2 indicating oversold conditions"
+    },
+    "Bearish": {
+      "entry_condition": "RSI2 < 8 and ATR_pct < 0.016",
+      "exit_condition": "RSI2 > 48 or Close > SMA_20",
+      "stop_loss": 0.015,
+      "take_profit": 0.03,
+      "reasoning": "Calm oversold condition in downtrend \u2014 RSI2 and ATR filter exclude false signals"
+    },
+    "Bullish": {
+      "entry_condition": "Close > SMA_20 and RSI2 < 20 and MACD_hist > 0",
+      "exit_condition": "Close < SMA_50 or RSI > 75",
+      "stop_loss": 0.025,
+      "take_profit": 0.07,
+      "reasoning": "Buying pullbacks in confirmed uptrend; RSI2 below 20 ensures oversold entry with MACD momentum"
+    },
+    "Neutral": {
+      "entry_condition": "SMA_20 > SMA_50 and RSI > 52 and RSI < 62",
+      "exit_condition": "SMA_20 < SMA_50 or RSI > 70 or RSI < 46",
+      "stop_loss": 0.02,
+      "take_profit": 0.045
+    }
+  }
+}
