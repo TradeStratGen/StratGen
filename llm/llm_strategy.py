@@ -9,6 +9,7 @@ from strategies.base_strategy import BaseStrategy
 from llm.client import OllamaClient, OpenRouterClient
 from llm.prompts import build_prompt
 from llm.parser import parse_strategy
+from utils.eval_utils import build_indicator_namespace, evaluate_expression
 
 REGIME_FALLBACKS = {
     "Bullish":  {"entry_condition": "Close > SMA_20 and Close < SMA_20 * 1.015 and RSI > 44 and RSI < 56", "exit_condition": "Close < SMA_50 or RSI > 76", "stop_loss": 0.025, "take_profit": 0.07},
@@ -66,10 +67,10 @@ class LLMStrategy(BaseStrategy):
         fallback = REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK)
 
         cached = self._get_cached_regime(regime)
-        if cached and cached.get("source") == "llm-generated":
+        if cached and cached.get("source") in {"llm-generated", "llm-modified"}:
             self._strategies[regime] = cached
             if self.verbose:
-                print(f"      source: llm-generated (cached, reused)")
+                print(f"      source: {cached.get('source')} (cached, reused)")
             return
 
         last_error = None
@@ -78,11 +79,11 @@ class LLMStrategy(BaseStrategy):
             try:
                 raw = self.client.generate(build_prompt(regime, sample_row, retry_index=attempt))
                 parsed = parse_strategy(raw, regime_df=regime_df, regime=regime)
-                if parsed and parsed.get("source") == "llm-generated":
+                if parsed and parsed.get("source") in {"llm-generated", "llm-modified"}:
                     self._strategies[regime] = parsed
                     self._set_cached_regime(regime, parsed)
                     if self.verbose:
-                        print(f"      source: llm-generated (attempt {attempt}/{GEN_RETRIES})")
+                        print(f"      source: {parsed.get('source')} (attempt {attempt}/{GEN_RETRIES})")
                         print(f"      entry : {parsed.get('entry_condition')}")
                         print(f"      exit  : {parsed.get('exit_condition')}")
                     return
@@ -135,13 +136,13 @@ class LLMStrategy(BaseStrategy):
 
     def _set_cached_regime(self, regime: str, strategy: dict):
         self._cache.setdefault("strategies", {}).setdefault(self._cache_key, {})[regime] = strategy
-        if str(strategy.get("source", "")).strip().lower() == "llm-generated":
+        if str(strategy.get("source", "")).strip().lower() in {"llm-generated", "llm-modified"}:
             self._cache.setdefault("last_good", {}).setdefault(self._cache_key, {})[regime] = strategy
         self._save_cache()
 
     def _get_last_good_regime(self, regime: str) -> dict | None:
         item = self._cache.get("last_good", {}).get(self._cache_key, {}).get(regime)
-        if isinstance(item, dict) and item.get("source") == "llm-generated":
+        if isinstance(item, dict) and item.get("source") in {"llm-generated", "llm-modified"}:
             return item
         return None
 
@@ -175,13 +176,7 @@ class LLMStrategy(BaseStrategy):
     def current_strategy(self): return self._active_strategy
 
 def _row_to_namespace(row) -> dict:
-    ns = {}
-    for col in ["Close","SMA_20","SMA_50","RSI","volatility","returns"]:
-        if col in row.index:
-            try: ns[col] = float(row[col])
-            except: ns[col] = 0.0
-    return ns
+    return build_indicator_namespace(row, context="LLMStrategy", strict=True)
 
 def _safe_eval(expr, ns) -> bool:
-    try:    return bool(eval(expr, {"__builtins__": {}}, ns))
-    except: return False
+    return evaluate_expression(expr, ns, context="LLMStrategy")

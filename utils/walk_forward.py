@@ -5,6 +5,7 @@ Uses the same MultiModelStrategy architecture.
 """
 from backtest.backtester import Backtester
 from utils.metrics import compute_metrics
+from utils.eval_utils import validate_indicator_dataframe
 
 
 def walk_forward_test(
@@ -41,6 +42,9 @@ def walk_forward_test(
         train_n  = int(len(split_df) * train_frac)
         train_df = split_df.iloc[:train_n]
         test_df  = split_df.iloc[train_n:]
+
+        validate_indicator_dataframe(train_df, context=f"walk_forward.train.split_{i+1}")
+        validate_indicator_dataframe(test_df, context=f"walk_forward.test.split_{i+1}")
 
         if len(test_df) < 30:
             print(f"  Split {i+1}: test window too small ({len(test_df)} bars), skipping")

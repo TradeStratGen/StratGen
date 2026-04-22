@@ -90,6 +90,7 @@ class DailyReporter:
         strategy:  dict,
         quantity:  int = 1,
         source:    str = "paper", # paper / dhan / backtest
+        broker_status: str = "success",
         dhan_response: dict = None,
         timestamp: str = "",
         date: str = "",
@@ -115,6 +116,7 @@ class DailyReporter:
             "price":         price,
             "quantity":      quantity,
             "source":        self._normalize_source_tag(source),
+            "broker_status": str(broker_status or "unknown").strip().lower() or "unknown",
             "strategy_source": str(strategy.get("source", "fallback") or "fallback"),
             "stop_loss_pct": strategy.get("stop_loss", 0),
             "take_profit_pct": strategy.get("take_profit", 0),
@@ -180,6 +182,7 @@ class DailyReporter:
                 strategy=strategy,
                 quantity=float(event.get("quantity", 1.0)),
                 source=source,
+                broker_status="success",
                 dhan_response={},
                 timestamp=ts_text,
                 date=date_text,

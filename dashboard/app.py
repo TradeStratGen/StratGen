@@ -573,19 +573,33 @@ def compute_source_performance(orders_df: pd.DataFrame) -> pd.DataFrame:
 
 def compute_strategy_origin_mix(closed_trades: pd.DataFrame) -> dict[str, float]:
     if closed_trades.empty or "entry_strategy_source" not in closed_trades.columns:
-        return {"llm_generated_pct": 0.0, "fallback_pct": 0.0, "known_trades": 0, "unknown_trades": 0}
+        return {
+            "llm_generated_pct": 0.0,
+            "llm_modified_pct": 0.0,
+            "fallback_pct": 0.0,
+            "known_trades": 0,
+            "unknown_trades": 0,
+        }
 
     src = closed_trades["entry_strategy_source"].fillna("unknown").astype(str).str.strip().str.lower()
     llm_count = int((src == "llm-generated").sum())
+    llm_modified_count = int((src == "llm-modified").sum())
     fallback_count = int((src == "fallback").sum())
-    known = llm_count + fallback_count
+    known = llm_count + llm_modified_count + fallback_count
     unknown = int(len(src)) - known
 
     if known == 0:
-        return {"llm_generated_pct": 0.0, "fallback_pct": 0.0, "known_trades": 0, "unknown_trades": unknown}
+        return {
+            "llm_generated_pct": 0.0,
+            "llm_modified_pct": 0.0,
+            "fallback_pct": 0.0,
+            "known_trades": 0,
+            "unknown_trades": unknown,
+        }
 
     return {
         "llm_generated_pct": (llm_count / known) * 100.0,
+        "llm_modified_pct": (llm_modified_count / known) * 100.0,
         "fallback_pct": (fallback_count / known) * 100.0,
         "known_trades": known,
         "unknown_trades": unknown,
@@ -826,9 +840,10 @@ def main():
     a3.metric("Profit Factor", fmt_ratio(advanced["profit_factor"]))
     a4.metric("Avg Win / Loss", f"{advanced['avg_win_pct']:+.2f}% / {advanced['avg_loss_pct']:+.2f}%")
 
-    t1, t2 = st.columns(2)
+    t1, t2, t3 = st.columns(3)
     t1.metric("LLM-Generated Trades %", f"{strategy_mix['llm_generated_pct']:.1f}%")
-    t2.metric("Fallback Trades %", f"{strategy_mix['fallback_pct']:.1f}%")
+    t2.metric("LLM-Modified Trades %", f"{strategy_mix['llm_modified_pct']:.1f}%")
+    t3.metric("Fallback Trades %", f"{strategy_mix['fallback_pct']:.1f}%")
     if strategy_mix["unknown_trades"] > 0:
         st.caption(
             f"Strategy-source transparency: {strategy_mix['known_trades']} labeled trades, "

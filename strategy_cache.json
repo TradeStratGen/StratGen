@@ -1,32 +1,41 @@
 {
-  "date": "2026-04-20",
+  "date": "2026-04-22",
   "strategies": {
-    "Volatile": {
-      "entry_condition": "RSI2 < 10 and ATR_pct < 0.022",
-      "exit_condition": "RSI2 > 78 or Close < SMA_50",
-      "stop_loss": 0.01,
-      "take_profit": 0.02,
-      "reasoning": "Mean reversion in high volatility with RSI2 indicating oversold conditions"
-    },
     "Bearish": {
-      "entry_condition": "RSI2 < 8 and ATR_pct < 0.016",
-      "exit_condition": "RSI2 > 48 or Close > SMA_20",
+      "entry_condition": "RSI2 < 7 and ATR_pct < 0.016",
+      "exit_condition": "RSI2 > 45 or Close < SMA_20",
       "stop_loss": 0.015,
       "take_profit": 0.03,
-      "reasoning": "Calm oversold condition in downtrend \u2014 RSI2 and ATR filter exclude false signals"
-    },
-    "Bullish": {
-      "entry_condition": "Close > SMA_20 and RSI2 < 20 and MACD_hist > 0",
-      "exit_condition": "Close < SMA_50 or RSI > 75",
-      "stop_loss": 0.025,
-      "take_profit": 0.07,
-      "reasoning": "Buying pullbacks in confirmed uptrend; RSI2 below 20 ensures oversold entry with MACD momentum"
+      "reasoning": "Calm oversold condition in downtrend \u2014 ATR filter excludes volatile days",
+      "source": "llm-generated",
+      "fire_rate": 0.2639
     },
     "Neutral": {
-      "entry_condition": "SMA_20 > SMA_50 and RSI > 52 and RSI < 62",
-      "exit_condition": "SMA_20 < SMA_50 or RSI > 70 or RSI < 46",
+      "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -150 and RSI2 > 30 and RSI2 < 60",
+      "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 70 or RSI > 70",
+      "stop_loss": 0.015,
+      "take_profit": 0.035,
+      "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+      "source": "llm-generated",
+      "fire_rate": 0.1131
+    },
+    "Bullish": {
+      "entry_condition": "Close < SMA_20 and RSI2 < 30 and MACD_hist > 0",
+      "exit_condition": "Close < SMA_50 or RSI > 75",
       "stop_loss": 0.02,
-      "take_profit": 0.045
+      "take_profit": 0.06,
+      "reasoning": "Entering on pullbacks in confirmed uptrend with oversold RSI2 and positive momentum",
+      "source": "llm-generated",
+      "fire_rate": 0.0
+    },
+    "Volatile": {
+      "entry_condition": "RSI2 < 30 and ATR_pct < 0.02",
+      "exit_condition": "RSI2 > 70 or Close < SMA_50",
+      "stop_loss": 0.01,
+      "take_profit": 0.02,
+      "reasoning": "Mean reversion in volatile market with RSI2 below 30 and ATR capped for risk",
+      "source": "llm-generated",
+      "fire_rate": 0.3621
     }
   }
 }

@@ -34,11 +34,13 @@ def main():
     from backtest.backtester import Backtester
     from utils.metrics import compute_metrics, print_metrics, compare_metrics
     from utils.walk_forward import walk_forward_test
+    from utils.eval_utils import validate_indicator_dataframe, build_indicator_namespace, evaluate_expression
 
     print("Fetching data...")
     df = fetch_data()
     df = add_indicators(df)
     df = apply_regime(df)
+    validate_indicator_dataframe(df, context="main")
 
     # ── 1. MA baseline ──────────────────────────────────────────────────
     print("\n--- Baseline: MA Crossover ---")
@@ -117,17 +119,10 @@ def main():
     regime    = today_row["regime"]
     strat     = multi.final_strategies.get(regime, {})
     if strat:
-        ns = {}
-        for col in ["Close","SMA_20","SMA_50","RSI","RSI2","MACD_hist","ATR_pct","volatility"]:
-            if col in today_row.index:
-                try: ns[col] = float(today_row[col])
-                except: ns[col] = 0.0
-        try:
-            entry = bool(eval(strat.get("entry_condition","False"), {"__builtins__":{}}, ns))
-            exit_ = bool(eval(strat.get("exit_condition","False"),  {"__builtins__":{}}, ns))
-            sig   = "BUY" if entry and not exit_ else ("SELL" if exit_ else "HOLD")  # noqa: F841
-        except:
-            sig = "HOLD"
+        ns = build_indicator_namespace(today_row, context="main.live-preview", strict=True)
+        entry = evaluate_expression(strat.get("entry_condition", "False"), ns, context="main.live-preview")
+        exit_ = evaluate_expression(strat.get("exit_condition", "False"), ns, context="main.live-preview")
+        sig = "BUY" if entry and not exit_ else ("SELL" if exit_ else "HOLD")  # noqa: F841
         icon = {"BUY":"✅","SELL":"🔴","HOLD":"⏸"}
         print(f"  Regime   : {regime}")
         print(f"  Signal   : {icon.get(sig,'')} {sig}")

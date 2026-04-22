@@ -1,15 +1,6 @@
 {
   "strategies": {
     "qwen2.5:7b-instruct": {
-      "Volatile": {
-        "entry_condition": "RSI2 < 70 and ATR_pct < 0.025",
-        "exit_condition": "RSI2 > 68 or Close < SMA_50",
-        "stop_loss": 0.01,
-        "take_profit": 0.02,
-        "reasoning": "Mean reversion in volatile market with RSI2 close to overbought but ATR capped for risk",
-        "source": "llm-generated",
-        "fire_rate": 0.4822
-      },
       "Bearish": {
         "entry_condition": "RSI2 < 7 and ATR_pct < 0.016",
         "exit_condition": "RSI2 > 45 or Close < SMA_20",
@@ -17,7 +8,19 @@
         "take_profit": 0.03,
         "reasoning": "Calm oversold condition in downtrend \u2014 ATR filter excludes volatile days",
         "source": "llm-generated",
-        "fire_rate": 0.2511
+        "fire_rate": 0.2639
+      },
+      "Neutral": {
+        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 > 25 and RSI2 < 65",
+        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 75 or RSI > 70",
+        "stop_loss": 0.018,
+        "take_profit": 0.04,
+        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+        "source": "llm-modified",
+        "parser_modifications": [
+          "entry-fire-rate-fallback"
+        ],
+        "fire_rate": 0.1478
       },
       "Bullish": {
         "entry_condition": "Close < SMA_20 and RSI2 < 30 and MACD_hist > 0",
@@ -28,34 +31,34 @@
         "source": "llm-generated",
         "fire_rate": 0.0
       },
-      "Neutral": {
-        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 > 25 and RSI2 < 65",
-        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 75 or RSI > 70",
-        "stop_loss": 0.018,
-        "take_profit": 0.04,
-        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+      "Volatile": {
+        "entry_condition": "RSI2 < 30 and ATR_pct < 0.025",
+        "exit_condition": "RSI2 > 70 or Close < SMA_50",
+        "stop_loss": 0.01,
+        "take_profit": 0.02,
+        "reasoning": "Mean reversion in high volatility with ATR cap for risk management",
         "source": "llm-generated",
-        "fire_rate": 0.1433
+        "fire_rate": 0.3608
       }
     },
     "llama3.2:3b": {
-      "Volatile": {
-        "entry_condition": "RSI2 < 15 and ATR_pct < 0.025",
-        "exit_condition": "RSI2 > 68 or Close < SMA_50",
-        "stop_loss": 0.012,
-        "take_profit": 0.02,
-        "reasoning": "Mean reversion in choppy market; RSI2 below 15 with ATR cap for risk management",
-        "source": "llm-generated",
-        "fire_rate": 0.2335
-      },
       "Bearish": {
-        "entry_condition": "Close < SMA_20 and RSI2 < 15 and ATR_pct < 0.016",
+        "entry_condition": "Close < SMA_20 and RSI2 < 10 and ATR_pct < 0.016",
         "exit_condition": "Close > SMA_50 or Close < SMA_20",
         "stop_loss": 0.015,
         "take_profit": 0.03,
         "reasoning": "Calm oversold reversal in downtrend \u2014 ATR filter excludes panic-selling days",
         "source": "llm-generated",
-        "fire_rate": 0.2599
+        "fire_rate": 0.2685
+      },
+      "Neutral": {
+        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 >= 30 and RSI2 <= 60",
+        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 70 or RSI > 67",
+        "stop_loss": 0.018,
+        "take_profit": 0.04,
+        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+        "source": "llm-generated",
+        "fire_rate": 0.1131
       },
       "Bullish": {
         "entry_condition": "Close > SMA_20 and RSI2 < 30 and MACD_hist > 0",
@@ -66,28 +69,19 @@
         "source": "llm-generated",
         "fire_rate": 0.1995
       },
-      "Neutral": {
-        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 >= 25 and RSI2 <= 65",
-        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 70 or RSI > 67",
-        "stop_loss": 0.018,
-        "take_profit": 0.04,
-        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+      "Volatile": {
+        "entry_condition": "RSI2 < 15 and ATR_pct < 0.025",
+        "exit_condition": "RSI2 > 68 or Close < SMA_50",
+        "stop_loss": 0.012,
+        "take_profit": 0.025,
+        "reasoning": "Mean reversion in choppy market; RSI2 below 15 with ATR cap for risk management",
         "source": "llm-generated",
-        "fire_rate": 0.1433
+        "fire_rate": 0.3058
       }
     }
   },
   "last_good": {
     "qwen2.5:7b-instruct": {
-      "Volatile": {
-        "entry_condition": "RSI2 < 70 and ATR_pct < 0.025",
-        "exit_condition": "RSI2 > 68 or Close < SMA_50",
-        "stop_loss": 0.01,
-        "take_profit": 0.02,
-        "reasoning": "Mean reversion in volatile market with RSI2 close to overbought but ATR capped for risk",
-        "source": "llm-generated",
-        "fire_rate": 0.4822
-      },
       "Bearish": {
         "entry_condition": "RSI2 < 7 and ATR_pct < 0.016",
         "exit_condition": "RSI2 > 45 or Close < SMA_20",
@@ -95,7 +89,19 @@
         "take_profit": 0.03,
         "reasoning": "Calm oversold condition in downtrend \u2014 ATR filter excludes volatile days",
         "source": "llm-generated",
-        "fire_rate": 0.2511
+        "fire_rate": 0.2639
+      },
+      "Neutral": {
+        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 > 25 and RSI2 < 65",
+        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 75 or RSI > 70",
+        "stop_loss": 0.018,
+        "take_profit": 0.04,
+        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+        "source": "llm-modified",
+        "parser_modifications": [
+          "entry-fire-rate-fallback"
+        ],
+        "fire_rate": 0.1478
       },
       "Bullish": {
         "entry_condition": "Close < SMA_20 and RSI2 < 30 and MACD_hist > 0",
@@ -106,34 +112,34 @@
         "source": "llm-generated",
         "fire_rate": 0.0
       },
-      "Neutral": {
-        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 > 25 and RSI2 < 65",
-        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 75 or RSI > 70",
-        "stop_loss": 0.018,
-        "take_profit": 0.04,
-        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+      "Volatile": {
+        "entry_condition": "RSI2 < 30 and ATR_pct < 0.025",
+        "exit_condition": "RSI2 > 70 or Close < SMA_50",
+        "stop_loss": 0.01,
+        "take_profit": 0.02,
+        "reasoning": "Mean reversion in high volatility with ATR cap for risk management",
         "source": "llm-generated",
-        "fire_rate": 0.1433
+        "fire_rate": 0.3608
       }
     },
     "llama3.2:3b": {
-      "Volatile": {
-        "entry_condition": "RSI2 < 15 and ATR_pct < 0.025",
-        "exit_condition": "RSI2 > 68 or Close < SMA_50",
-        "stop_loss": 0.012,
-        "take_profit": 0.02,
-        "reasoning": "Mean reversion in choppy market; RSI2 below 15 with ATR cap for risk management",
-        "source": "llm-generated",
-        "fire_rate": 0.2335
-      },
       "Bearish": {
-        "entry_condition": "Close < SMA_20 and RSI2 < 15 and ATR_pct < 0.016",
+        "entry_condition": "Close < SMA_20 and RSI2 < 10 and ATR_pct < 0.016",
         "exit_condition": "Close > SMA_50 or Close < SMA_20",
         "stop_loss": 0.015,
         "take_profit": 0.03,
         "reasoning": "Calm oversold reversal in downtrend \u2014 ATR filter excludes panic-selling days",
         "source": "llm-generated",
-        "fire_rate": 0.2599
+        "fire_rate": 0.2685
+      },
+      "Neutral": {
+        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 >= 30 and RSI2 <= 60",
+        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 70 or RSI > 67",
+        "stop_loss": 0.018,
+        "take_profit": 0.04,
+        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+        "source": "llm-generated",
+        "fire_rate": 0.1131
       },
       "Bullish": {
         "entry_condition": "Close > SMA_20 and RSI2 < 30 and MACD_hist > 0",
@@ -144,14 +150,14 @@
         "source": "llm-generated",
         "fire_rate": 0.1995
       },
-      "Neutral": {
-        "entry_condition": "Close > SMA_20 * 0.99 and MACD_hist > -100 and RSI2 >= 25 and RSI2 <= 65",
-        "exit_condition": "Close < SMA_20 * 0.98 or RSI2 > 70 or RSI > 67",
-        "stop_loss": 0.018,
-        "take_profit": 0.04,
-        "reasoning": "Entry when price near SMA_20 with MACD not deeply negative and RSI2 in middle range",
+      "Volatile": {
+        "entry_condition": "RSI2 < 15 and ATR_pct < 0.025",
+        "exit_condition": "RSI2 > 68 or Close < SMA_50",
+        "stop_loss": 0.012,
+        "take_profit": 0.025,
+        "reasoning": "Mean reversion in choppy market; RSI2 below 15 with ATR cap for risk management",
         "source": "llm-generated",
-        "fire_rate": 0.1433
+        "fire_rate": 0.3058
       }
     }
   }

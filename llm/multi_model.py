@@ -19,6 +19,7 @@ from llm.prompts import build_prompt
 from llm.parser import parse_strategy, REGIME_FALLBACKS
 from backtest.backtester import Backtester
 from utils.metrics import compute_metrics
+from utils.eval_utils import build_indicator_namespace, evaluate_expression
 from config import MIN_HOLD_BARS, POST_SELL_COOLDOWN
 
 _DEFAULT_FALLBACK = REGIME_FALLBACKS["Neutral"]
@@ -54,8 +55,8 @@ class _ModelStrategy(BaseStrategy):
             self._active_regime = regime
 
         ns    = _ns(row)
-        entry = _eval(self._active_strategy.get("entry_condition", "False"), ns)
-        exit_ = _eval(self._active_strategy.get("exit_condition",  "False"), ns)
+        entry = _eval(self._active_strategy.get("entry_condition", "False"), ns, context="MultiModel._ModelStrategy")
+        exit_ = _eval(self._active_strategy.get("exit_condition",  "False"), ns, context="MultiModel._ModelStrategy")
 
         if self._in_position:
             self._bars_held += 1
@@ -180,10 +181,10 @@ class MultiModelStrategy(BaseStrategy):
                 print(f"  [{model_name[:22]:<22}] '{regime}'...")
 
             cached = self._get_cached_regime(model_name, regime)
-            if cached and cached.get("source") == "llm-generated":
+            if cached and cached.get("source") in {"llm-generated", "llm-modified"}:
                 strategies[regime] = cached
                 if self.verbose:
-                    print("  " + " " * 24 + "source: llm-generated (cached, reused)")
+                    print("  " + " " * 24 + f"source: {cached.get('source')} (cached, reused)")
                 continue
 
             last_error = None
@@ -192,11 +193,11 @@ class MultiModelStrategy(BaseStrategy):
                 try:
                     raw = client.generate(build_prompt(regime, sample_row, retry_index=attempt))
                     parsed = parse_strategy(raw, regime_df=regime_df, regime=regime)
-                    if parsed and parsed.get("source") == "llm-generated":
+                    if parsed and parsed.get("source") in {"llm-generated", "llm-modified"}:
                         strategies[regime] = parsed
                         self._set_cached_regime(model_name, regime, parsed)
                         if self.verbose:
-                            print("  " + " " * 24 + f"source: llm-generated (attempt {attempt}/{GEN_RETRIES})")
+                            print("  " + " " * 24 + f"source: {parsed.get('source')} (attempt {attempt}/{GEN_RETRIES})")
                             print(f"  {'':24}  entry: {strategies[regime].get('entry_condition')}")
                         break
                     fallback_reason = str((parsed or {}).get("fallback_reason", "parser-returned-fallback"))
@@ -248,13 +249,13 @@ class MultiModelStrategy(BaseStrategy):
 
     def _set_cached_regime(self, model_name: str, regime: str, strategy: dict):
         self._cache.setdefault("strategies", {}).setdefault(model_name, {})[regime] = strategy
-        if str(strategy.get("source", "")).strip().lower() == "llm-generated":
+        if str(strategy.get("source", "")).strip().lower() in {"llm-generated", "llm-modified"}:
             self._cache.setdefault("last_good", {}).setdefault(model_name, {})[regime] = strategy
         self._save_cache()
 
     def _get_last_good_regime(self, model_name: str, regime: str) -> dict | None:
         item = self._cache.get("last_good", {}).get(model_name, {}).get(regime)
-        if isinstance(item, dict) and item.get("source") == "llm-generated":
+        if isinstance(item, dict) and item.get("source") in {"llm-generated", "llm-modified"}:
             return item
         return None
 
@@ -338,8 +339,8 @@ class MultiModelStrategy(BaseStrategy):
             self._active_regime = regime
 
         ns    = _ns(row)
-        entry = _eval(self._active_strategy.get("entry_condition", "False"), ns)
-        exit_ = _eval(self._active_strategy.get("exit_condition",  "False"), ns)
+        entry = _eval(self._active_strategy.get("entry_condition", "False"), ns, context="MultiModelStrategy")
+        exit_ = _eval(self._active_strategy.get("exit_condition",  "False"), ns, context="MultiModelStrategy")
 
         if self._in_position:
             self._bars_held += 1
@@ -374,13 +375,7 @@ class MultiModelStrategy(BaseStrategy):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _ns(row) -> dict:
-    ns = {}
-    for col in ["Close","SMA_20","SMA_50","RSI","RSI2","MACD_hist","ATR_pct","volatility","returns"]:
-        if col in row.index:
-            try:    ns[col] = float(row[col])
-            except: ns[col] = 0.0
-    return ns
+    return build_indicator_namespace(row, context="MultiModelStrategy", strict=True)
 
-def _eval(expr: str, ns: dict) -> bool:
-    try:    return bool(eval(expr, {"__builtins__": {}}, ns))
-    except: return False
+def _eval(expr: str, ns: dict, context: str = "MultiModelStrategy") -> bool:
+    return evaluate_expression(expr, ns, context=context)

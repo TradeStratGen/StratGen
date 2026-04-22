@@ -26,6 +26,7 @@ Trail percentages per regime (from strategy stop_loss field):
 """
 
 from config import INITIAL_CAPITAL, POSITION_SIZE_FRAC
+from utils.eval_utils import build_indicator_namespace, evaluate_expression
 
 
 # Trail percentage = how far price can fall from peak before we exit
@@ -55,12 +56,13 @@ class Backtester:
     def run(self):
         for index, row in self.df.iterrows():
             price = float(row["Close"])
+            indicator_ns = build_indicator_namespace(row, context="backtester", strict=True)
 
             # ── Update SL/TP/trail from current strategy ──────────────────
-            strat = getattr(self.strategy, "current_strategy", {})
-            if strat:
-                sl = float(strat.get("stop_loss",   self._sl_frac))
-                tp = float(strat.get("take_profit", self._tp_frac))
+            strat_pre = getattr(self.strategy, "current_strategy", {})
+            if strat_pre:
+                sl = float(strat_pre.get("stop_loss",   self._sl_frac))
+                tp = float(strat_pre.get("take_profit", self._tp_frac))
                 self._sl_frac   = sl
                 self._tp_frac   = tp
                 # Trail is set to SL width — gives the same downside protection
@@ -82,7 +84,7 @@ class Backtester:
                     self.capital    += proceeds
                     gain_pct         = (price - self.entry_price) / self.entry_price * 100
                     self.trades.append((index, "SELL-TRAIL", price))
-                    self._record_order_event(index, "SELL", "SELL-TRAIL", price, sell_qty, row, strat)
+                    self._record_order_event(index, "SELL", "SELL-TRAIL", price, sell_qty, row, strat_pre)
                     self._reset_position()
                     self.equity_curve.append(self.capital)
                     continue
@@ -95,7 +97,7 @@ class Backtester:
                     proceeds         = self.position * price
                     self.capital    += proceeds
                     self.trades.append((index, "SELL-SL", price))
-                    self._record_order_event(index, "SELL", "SELL-SL", price, sell_qty, row, strat)
+                    self._record_order_event(index, "SELL", "SELL-SL", price, sell_qty, row, strat_pre)
                     self._reset_position()
                     self.equity_curve.append(self.capital)
                     continue
@@ -109,13 +111,17 @@ class Backtester:
                     proceeds         = self.position * price
                     self.capital    += proceeds
                     self.trades.append((index, "SELL-TP", price))
-                    self._record_order_event(index, "SELL", "SELL-TP", price, sell_qty, row, strat)
+                    self._record_order_event(index, "SELL", "SELL-TP", price, sell_qty, row, strat_pre)
                     self._reset_position()
                     self.equity_curve.append(self.capital)
                     continue
 
             # ── Strategy signal ───────────────────────────────────────────
             signal = self.strategy.generate_signal(row)
+            strat = getattr(self.strategy, "current_strategy", {})
+            if strat:
+                evaluate_expression(strat.get("entry_condition", "False"), indicator_ns, context="backtester")
+                evaluate_expression(strat.get("exit_condition", "False"), indicator_ns, context="backtester")
 
             if signal == "BUY" and self.position == 0:
                 invest           = self.capital * POSITION_SIZE_FRAC

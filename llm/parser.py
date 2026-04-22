@@ -53,6 +53,7 @@ REGIME_REJECT_FIRE = 0.50
 
 def parse_strategy(raw_text: str, regime_df=None, regime: str = "") -> dict:
     fallback = REGIME_FALLBACKS.get(regime, _DEFAULT_FALLBACK)
+    parser_modifications: list[str] = []
 
     if not raw_text or not raw_text.strip():
         out = fallback.copy()
@@ -60,19 +61,41 @@ def parse_strategy(raw_text: str, regime_df=None, regime: str = "") -> dict:
         out["fallback_reason"] = "empty-llm-output"
         return out
 
-    data = _extract_json(_strip_fences(raw_text))
+    data, json_corrected = _extract_json(_strip_fences(raw_text))
     if data is None:
         out = fallback.copy()
         out["source"] = "fallback"
         out["fallback_reason"] = "invalid-json-output"
         return out
+    if json_corrected:
+        parser_modifications.append("json-corrected")
 
     for f in REQUIRED_FIELDS:
         if f not in data:
             data[f] = fallback[f]
+            parser_modifications.append(f"missing-{f}-filled")
 
-    entry = _validate_condition(data["entry_condition"], "entry_condition") or fallback["entry_condition"]
-    exit_ = _validate_condition(data["exit_condition"],  "exit_condition")  or fallback["exit_condition"]
+    raw_entry = data.get("entry_condition")
+    raw_exit = data.get("exit_condition")
+
+    entry_validated = _validate_condition(raw_entry, "entry_condition")
+    exit_validated = _validate_condition(raw_exit, "exit_condition")
+
+    if entry_validated is None:
+        entry = fallback["entry_condition"]
+        parser_modifications.append("entry-condition-replaced")
+    else:
+        entry = entry_validated
+        if str(raw_entry).strip() != entry:
+            parser_modifications.append("entry-condition-normalized")
+
+    if exit_validated is None:
+        exit_ = fallback["exit_condition"]
+        parser_modifications.append("exit-condition-replaced")
+    else:
+        exit_ = exit_validated
+        if str(raw_exit).strip() != exit_:
+            parser_modifications.append("exit-condition-normalized")
 
     fire_rate = None
     if regime_df is not None and len(regime_df) > 10:
@@ -80,6 +103,7 @@ def parse_strategy(raw_text: str, regime_df=None, regime: str = "") -> dict:
         if fire_rate > REGIME_REJECT_FIRE:
             print(f"[Parser] [{regime}] entry fires {fire_rate:.0%} > {REGIME_REJECT_FIRE:.0%} — fallback entry")
             entry     = fallback["entry_condition"]
+            parser_modifications.append("entry-fire-rate-fallback")
             fire_rate = _measure_fire_rate(entry, regime_df)
         elif fire_rate > REGIME_WARN_FIRE:
             print(f"[Parser] [{regime}] entry fire rate high ({fire_rate:.0%}) but accepted")
@@ -95,8 +119,10 @@ def parse_strategy(raw_text: str, regime_df=None, regime: str = "") -> dict:
         "stop_loss":       _clamp(data["stop_loss"],   0.005, 0.15, fallback["stop_loss"]),
         "take_profit":     _clamp(data["take_profit"], 0.005, 0.40, fallback["take_profit"]),
         "reasoning":       reasoning,
-        "source":          "llm-generated",
+        "source":          "llm-modified" if parser_modifications else "llm-generated",
     }
+    if parser_modifications:
+        out["parser_modifications"] = sorted(set(parser_modifications))
     if fire_rate is not None:
         out["fire_rate"] = round(float(fire_rate), 4)
     return out
@@ -153,8 +179,10 @@ def _strip_fences(text):
 
 
 def _extract_json(text):
-    try: return json.loads(text)
-    except: pass
+    try:
+        return json.loads(text), False
+    except:
+        pass
 
     # Minor format issues: single quotes, bare keys, trailing commas
     normalized = text
@@ -162,7 +190,7 @@ def _extract_json(text):
     normalized = re.sub(r",\s*([}\]])", r"\1", normalized)
     normalized = normalized.replace("'", '"')
     try:
-        return json.loads(normalized)
+        return json.loads(normalized), True
     except:
         pass
 
@@ -170,14 +198,14 @@ def _extract_json(text):
     if m:
         frag = m.group()
         try:
-            return json.loads(frag)
+            return json.loads(frag), True
         except:
             frag = re.sub(r"([{,]\s*)([A-Za-z_][\w]*)\s*:", r'\1"\2":', frag)
             frag = re.sub(r",\s*([}\]])", r"\1", frag)
             frag = frag.replace("'", '"')
-            try: return json.loads(frag)
+            try: return json.loads(frag), True
             except: pass
-    return None
+    return None, False
 
 
 def _clamp(value, lo, hi, default):

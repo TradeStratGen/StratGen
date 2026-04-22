@@ -19,6 +19,7 @@ import datetime
 import argparse
 from pathlib import Path
 from dotenv import load_dotenv
+from utils.eval_utils import build_indicator_namespace, evaluate_expression, validate_indicator_dataframe
 
 load_dotenv()
 
@@ -77,6 +78,7 @@ def run_live_signal(place_order: bool = False):
     df = fetch_data()
     df = add_indicators(df)
     df = apply_regime(df)
+    validate_indicator_dataframe(df, context="live_signal")
 
     today_row = df.iloc[-1]
     bar_date  = df.index[-1].date()
@@ -122,12 +124,9 @@ def run_live_signal(place_order: bool = False):
     entry_cond = strat.get("entry_condition", "False")
     exit_cond  = strat.get("exit_condition",  "False")
 
-    ns = {k: v for k, v in indicators.items() if v is not None}
-    try:
-        entry_fires = bool(eval(entry_cond, {"__builtins__": {}}, ns))
-        exit_fires  = bool(eval(exit_cond,  {"__builtins__": {}}, ns))
-    except Exception:
-        entry_fires = exit_fires = False
+    ns = build_indicator_namespace(today_row, context="live_signal", strict=True)
+    entry_fires = evaluate_expression(entry_cond, ns, context="live_signal")
+    exit_fires  = evaluate_expression(exit_cond, ns, context="live_signal")
 
     if entry_fires and not exit_fires:
         signal = "BUY"
@@ -173,21 +172,43 @@ def run_live_signal(place_order: bool = False):
         print(f"     Exit  condition: {exit_cond}  → {exit_fires}")
     print(f"{'─'*62}\n")
 
-    # ── 4b. Persist position state only on valid executions ───────────────
-    if signal == "BUY":
+    # ── 5. Save signal log ─────────────────────────────────────────────────
+    reporter.log_signal(regime, signal, strat, indicators)
+
+    # ── 5b. Execution commit flow (broker -> order log -> state) ──────────
+    executed = False
+    broker_result: dict = {}
+
+    if signal in ("BUY", "SELL"):
+        if place_order:
+            broker_result = _place_dhan_order(signal, indicators["Close"])
+            broker_status = str(broker_result.get("broker_status", "failed")).lower()
+
+            reporter.log_order(
+                signal,
+                indicators["Close"],
+                regime,
+                strat,
+                source="live-llm",
+                broker_status=broker_status,
+                dhan_response=broker_result,
+            )
+
+            if broker_status == "success":
+                executed = True
+            else:
+                print(f"[Execution] Broker failed; state unchanged ({broker_result.get('error', 'unknown-error')})")
+        else:
+            print("[Execution] --order not set; no broker execution, no order/state commit")
+
+    if executed and signal == "BUY":
         state["in_position"] = True
         state["last_action"] = "BUY"
         _save_position_state(state)
-    elif signal == "SELL":
+    elif executed and signal == "SELL":
         state["in_position"] = False
         state["last_action"] = "SELL"
         _save_position_state(state)
-
-    # ── 5. Save signal log ─────────────────────────────────────────────────
-    reporter.log_signal(regime, signal, strat, indicators)
-    # Only BUY/SELL are logged as orders — reporter silently skips HOLD
-    reporter.log_order(signal, indicators['Close'], regime, strat,
-                       source="live-llm")
 
     # ── Wire daily report (was defined but never called) ──────────────────
     reporter.save_daily_report(
@@ -198,10 +219,6 @@ def run_live_signal(place_order: bool = False):
         today_signal=signal,
         today_regime=regime,
     )
-
-    # ── 6. Dhan paper trade ────────────────────────────────────────────────
-    if place_order and signal in ("BUY", "SELL"):
-        _place_dhan_order(signal, indicators['Close'])
 
     return signal
 
@@ -226,7 +243,12 @@ def _place_dhan_order(action: str, price: float) -> dict:
         print("\n[Dhan] ⚠  Credentials missing.")
         print("[Dhan]    Add DHAN_ACCESS_TOKEN and DHAN_CLIENT_ID to .env")
         print("[Dhan]    Then run:  python live_signal.py --order")
-        return {}
+        return {
+            "broker_status": "failed",
+            "error": "missing-credentials",
+            "action": action,
+            "price": price,
+        }
 
     # ── Safety: explicit opt-in for live broker execution ─────────────────
     # Default is paper-only. Set DHAN_LIVE=1 in .env ONLY for real orders.
@@ -235,7 +257,12 @@ def _place_dhan_order(action: str, price: float) -> dict:
         print(f"\n[Dhan] PAPER MODE (DHAN_LIVE not set) — order NOT sent to broker.")
         print(f"[Dhan] Intended: {action} @ ₹{price:,.2f}")
         print("[Dhan] Set DHAN_LIVE=1 in .env to enable real execution.")
-        return {"paper_only": True, "action": action, "price": price}
+        return {
+            "broker_status": "failed",
+            "error": "paper-mode-no-execution",
+            "action": action,
+            "price": price,
+        }
 
     try:
         from dhanhq import dhanhq
@@ -260,14 +287,30 @@ def _place_dhan_order(action: str, price: float) -> dict:
 
         print(f"\n[Dhan] ✅ Paper order placed: {action} @ ₹{price:,.2f}")
         print(f"[Dhan] Order ID: {order.get('data', {}).get('orderId', 'N/A')}")
-        return order
+        return {
+            "broker_status": "success",
+            "action": action,
+            "price": price,
+            "order_id": order.get("data", {}).get("orderId", ""),
+            "raw_response": order,
+        }
 
     except ImportError:
         print("[Dhan] dhanhq not installed → pip install dhanhq")
-        return {}
+        return {
+            "broker_status": "failed",
+            "error": "dhanhq-not-installed",
+            "action": action,
+            "price": price,
+        }
     except Exception as e:
         print(f"[Dhan] Order failed: {e}")
-        return {}
+        return {
+            "broker_status": "failed",
+            "error": str(e),
+            "action": action,
+            "price": price,
+        }
 
 
 def print_history():
